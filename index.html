@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="nl">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#153f52" />
+    <meta
+      name="description"
+      content="Zoek een overledene op de Brugse begraafplaatsen en toon de grafplaats op de kaart."
+    />
+    <title>Zoek een overledene | Stad Brugge</title>
+
+    <link rel="preconnect" href="https://js.arcgis.com" />
+    <link rel="stylesheet" href="https://js.arcgis.com/5.1/esri/themes/light/main.css" />
+    <link rel="stylesheet" href="./styles.css" />
+
+    <script type="module" src="https://js.arcgis.com/5.1/"></script>
+    <script type="module" src="./app.js"></script>
+  </head>
+
+  <body>
+    <a class="skip-link" href="#searchInput">Ga naar zoeken</a>
+
+    <div id="app" class="app-shell">
+      <header class="app-header" role="banner">
+        <div class="brand-lockup" aria-label="Stad Brugge">
+          <span class="brand-mark" aria-hidden="true">B</span>
+          <span class="brand-name">Stad Brugge</span>
+        </div>
+        <div class="header-title" aria-hidden="true">Zoek een overledene</div>
+      </header>
+
+      <main class="app-main">
+        <section id="searchPanel" class="search-panel" aria-label="Zoek een overledene">
+          <div class="panel-intro">
+            <p class="eyebrow">Begraafplaatsen</p>
+            <h1 id="pageTitle">Zoek een overledene</h1>
+            <p id="pageSubtitle" class="intro-text">
+              Zoek waar een overledene op een Brugse begraafplaats begraven ligt.
+            </p>
+          </div>
+
+          <form id="searchForm" class="search-form" novalidate>
+            <label for="searchInput">Naam van de overledene</label>
+            <div class="search-row">
+              <input
+                id="searchInput"
+                name="q"
+                type="search"
+                autocomplete="off"
+                inputmode="search"
+                placeholder="Typ voornaam en/of familienaam"
+                aria-describedby="searchHelp"
+              />
+              <button id="searchButton" class="button button-primary" type="submit">
+                <span class="button-icon" aria-hidden="true">⌕</span>
+                <span>Zoeken</span>
+              </button>
+            </div>
+            <p id="searchHelp" class="field-help">
+              Je hoeft de volledige naam niet te kennen. Voornaam en familienaam mogen in eender welke volgorde staan.
+            </p>
+
+            <details id="filterDetails" class="filters">
+              <summary>
+                <span>Verfijn je zoekopdracht</span>
+                <span id="activeFilterBadge" class="filter-badge" hidden>0</span>
+              </summary>
+              <div class="filter-grid">
+                <div class="field-group">
+                  <label for="cemeteryFilter">Begraafplaats</label>
+                  <select id="cemeteryFilter" disabled>
+                    <option value="">Alle begraafplaatsen</option>
+                  </select>
+                </div>
+                <div class="field-group">
+                  <label for="yearFilter">Jaar van overlijden</label>
+                  <input
+                    id="yearFilter"
+                    type="number"
+                    min="1800"
+                    max="2200"
+                    step="1"
+                    inputmode="numeric"
+                    placeholder="bv. 2021"
+                  />
+                </div>
+              </div>
+              <button id="clearFiltersButton" class="text-button" type="button">Filters wissen</button>
+            </details>
+          </form>
+
+          <div class="result-toolbar">
+            <p id="resultStatus" class="result-status" role="status" aria-live="polite"></p>
+            <button id="clearSearchButton" class="text-button" type="button" hidden>Nieuwe zoekopdracht</button>
+          </div>
+
+          <div id="messagePanel" class="message-panel" role="status">
+            <div class="message-icon" aria-hidden="true">⌕</div>
+            <h2 id="messageTitle">Zoeken op naam</h2>
+            <p id="messageText">Vul een naam in om te zoeken.</p>
+          </div>
+
+          <div id="resultsList" class="results-list" aria-label="Zoekresultaten" hidden></div>
+
+          <section id="desktopDetail" class="detail-card desktop-detail" aria-labelledby="desktopDetailTitle" hidden>
+            <div class="detail-heading-row">
+              <div>
+                <p class="eyebrow">Geselecteerde grafplaats</p>
+                <h2 id="desktopDetailTitle"></h2>
+              </div>
+              <button class="icon-button close-detail" type="button" aria-label="Selectie sluiten">×</button>
+            </div>
+            <div id="desktopDetailBody" class="detail-body"></div>
+          </section>
+        </section>
+
+        <section id="mapPanel" class="map-panel" aria-label="Kaart met grafplaatsen">
+          <div id="mapView" class="map-view"></div>
+
+          <div class="map-topbar mobile-only">
+            <button id="mobileBackButton" class="button button-surface" type="button">
+              <span aria-hidden="true">←</span>
+              <span>Resultaten</span>
+            </button>
+          </div>
+
+          <div id="mapLoading" class="map-loading" role="status">
+            <div class="spinner" aria-hidden="true"></div>
+            <span>Kaart laden…</span>
+          </div>
+
+          <aside id="mobileDetail" class="mobile-detail" aria-labelledby="mobileDetailTitle" hidden>
+            <div class="mobile-detail-handle" aria-hidden="true"></div>
+            <p class="eyebrow">Geselecteerde grafplaats</p>
+            <h2 id="mobileDetailTitle"></h2>
+            <div id="mobileDetailBody" class="detail-body"></div>
+          </aside>
+        </section>
+      </main>
+    </div>
+
+    <div id="fatalError" class="fatal-error" role="alert" hidden>
+      <div class="fatal-error-card">
+        <h2>De toepassing kon niet worden geladen</h2>
+        <p id="fatalErrorText"></p>
+        <p class="small-text">
+          Controleer of de webmap en de gebruikte featurelagen publiek gedeeld zijn en kijk indien nodig de instellingen in
+          <code>config.js</code> na.
+        </p>
+      </div>
+    </div>
+  </body>
+</html>
