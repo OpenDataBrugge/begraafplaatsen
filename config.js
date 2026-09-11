@@ -4,7 +4,10 @@ export const CONFIG = {
     "Zoek waar een overledene op een Brugse begraafplaats begraven ligt.",
 
   // Publieke ArcGIS Online-webmap van Stad Brugge.
-  portalUrl: "https://stadbrugge.maps.arcgis.com",
+  // Gebruik het globale ArcGIS Online-portaal voor browsertoegang vanaf
+  // GitHub Pages. Het organisatieportaal stadbrugge.maps.arcgis.com blokkeert
+  // cross-origin requests naar /sharing/rest/portals/self.
+  portalUrl: "https://www.arcgis.com",
   webMapId: "a8fcf951710043f4825127ba89d2fa1f",
 
   // Productieconfiguratie voor BZ_0000_Begraafplaats_Search.

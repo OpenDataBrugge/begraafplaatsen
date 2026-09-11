@@ -159,3 +159,15 @@ config.js     vaste webmap-, laag- en veldconfiguratie
 .nojekyll     voorkomt Jekyll-verwerking op GitHub Pages
 README.md     deze handleiding
 ```
+
+## GitHub Pages en ArcGIS Online CORS
+
+De app laadt de publieke webmap via `https://www.arcgis.com`, ook al werd de webmap oorspronkelijk geopend via `https://stadbrugge.maps.arcgis.com`. Dit is bewust: het organisatieportaal kan browserrequests vanaf een andere origin zoals GitHub Pages blokkeren op `/sharing/rest/portals/self`. Publieke ArcGIS Online-items zijn via het globale ArcGIS Online-portaal toegankelijk.
+
+Laat daarom in `config.js` staan:
+
+```js
+portalUrl: "https://www.arcgis.com"
+```
+
+Zet dit voor de GitHub Pages-versie niet terug naar `https://stadbrugge.maps.arcgis.com`.
