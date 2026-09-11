@@ -3,28 +3,36 @@ export const CONFIG = {
   appSubtitle:
     "Zoek waar een overledene op een Brugse begraafplaats begraven ligt.",
 
-  // Bestaande ArcGIS Online-webmap van Stad Brugge.
+  // Publieke ArcGIS Online-webmap van Stad Brugge.
   portalUrl: "https://stadbrugge.maps.arcgis.com",
   webMapId: "a8fcf951710043f4825127ba89d2fa1f",
 
-  // Laat deze arrays leeg om de app automatisch de juiste zoeklaag/velden
-  // te laten detecteren. Voor productie is expliciet invullen nog robuuster.
+  // Productieconfiguratie voor BZ_0000_Begraafplaats_Search.
+  // Deze veldnamen komen rechtstreeks uit de publieke laag.
   data: {
     searchLayerIds: [],
-    searchLayerTitles: [],
-    searchFields: [],
+    searchLayerTitles: ["BZ_0000_Begraafplaats_Search"],
+    // In de publieke webmap kan de zoekbron als Map Image Layer voorkomen.
+    // De screenshot met velddefinities toont deze sublaag.
+    searchSublayerTitles: ["0000_LABELS"],
 
-    fullNameFields: [],
-    firstNameFields: [],
-    lastNameFields: [],
+    // Zoek op volledige naam én op de afzonderlijke naamvelden.
+    // De zoeklogica splitst de invoer in woorden, zodat zowel
+    // "Jan Peeters" als "Peeters Jan" bruikbaar zijn.
+    searchFields: ["VOLNAAM", "NAAM", "VOORNAAM"],
 
-    cemeteryField: "",
+    fullNameFields: ["VOLNAAM"],
+    firstNameFields: ["VOORNAAM"],
+    lastNameFields: ["NAAM"],
+
+    cemeteryField: "BEGRAAFPLAATS",
     deathYearField: "",
-    deathDateField: "",
+    deathDateField: "OVERLIJDENSDATUM",
     birthYearField: "",
     birthDateField: "",
-    concessionEndField: "",
-    graveFields: [],
+    concessionEndField: "EINDDATUM",
+    concessionDurationField: "DUUR",
+    graveFields: ["BLOKNR", "GRAFNUMMER"],
   },
 
   search: {

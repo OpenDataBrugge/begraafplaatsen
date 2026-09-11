@@ -1,9 +1,11 @@
 import { CONFIG } from "./config.js";
 
-const [esriConfig, WebMap, MapView] = await $arcgis.import([
+const [esriConfig, WebMap, MapView, FeatureLayer, Graphic] = await $arcgis.import([
   "@arcgis/core/config.js",
   "@arcgis/core/WebMap.js",
   "@arcgis/core/views/MapView.js",
+  "@arcgis/core/layers/FeatureLayer.js",
+  "@arcgis/core/Graphic.js",
 ]);
 
 const $ = (selector) => document.querySelector(selector);
@@ -42,7 +44,7 @@ const state = {
   searchSources: [],
   results: [],
   selectedKey: null,
-  highlightHandle: null,
+  highlightGraphic: null,
   searchSequence: 0,
 };
 
@@ -213,6 +215,7 @@ function sourceMetadata(layer) {
     birthYearField: findFirstField(layer, CONFIG.data.birthYearField, PATTERNS.birthYear),
     birthDateField: findFirstField(layer, CONFIG.data.birthDateField, PATTERNS.birthDate, { datesOnly: true }),
     concessionEndField: findFirstField(layer, CONFIG.data.concessionEndField, PATTERNS.concessionEnd),
+    concessionDurationField: findFirstField(layer, CONFIG.data.concessionDurationField, ["duur concessie", "concessieduur", "duur"]),
     graveFields: findFields(layer, CONFIG.data.graveFields, PATTERNS.grave).slice(0, 4),
   };
 }
@@ -224,37 +227,120 @@ function matchesConfiguredLayer(layer) {
   return ids.includes(normalized(layer.id)) || titles.includes(normalized(layer.title));
 }
 
+function matchesConfiguredSublayer(sublayer) {
+  const titles = (CONFIG.data.searchSublayerTitles || []).map(normalized);
+  if (!titles.length) return true;
+  return titles.includes(normalized(sublayer.title));
+}
+
+async function featureLayerFromSublayer(parentLayer, sublayer) {
+  // createFeatureLayer() bewaart de velddefinities van de MapServer-sublayer.
+  // De URL-fallback maakt de app ook bruikbaar wanneer die methode niet
+  // beschikbaar is in een toekomstige SDK-versie.
+  let featureLayer = null;
+  if (typeof sublayer.createFeatureLayer === "function") {
+    try {
+      featureLayer = await sublayer.createFeatureLayer();
+    } catch (error) {
+      console.warn("Sublayer kon niet rechtstreeks als FeatureLayer worden aangemaakt:", sublayer.title, error);
+    }
+  }
+
+  if (!featureLayer && parentLayer.url && Number.isFinite(Number(sublayer.id))) {
+    featureLayer = new FeatureLayer({
+      url: `${String(parentLayer.url).replace(/\/$/, "")}/${sublayer.id}`,
+      title: sublayer.title,
+    });
+  }
+
+  if (!featureLayer) return null;
+  await featureLayer.load();
+  return featureLayer;
+}
+
 async function discoverSearchSources(webmap) {
-  const featureLayers = webmap.allLayers
-    .toArray()
-    .filter((layer) => layer.type === "feature")
-    .filter(matchesConfiguredLayer);
+  const configuredParents = webmap.allLayers.toArray().filter(matchesConfiguredLayer);
+  const candidates = [];
+
+  async function inspectLayer(layer, rootTitle, requireSublayerMatch = false) {
+    await layer.load();
+
+    if (layer.type === "feature") {
+      if (!requireSublayerMatch || matchesConfiguredSublayer(layer)) {
+        candidates.push({
+          layer,
+          parentTitle: rootTitle || layer.title,
+          sublayerTitle: rootTitle && rootTitle !== layer.title ? layer.title : null,
+        });
+      }
+      return;
+    }
+
+    if (layer.type === "map-image") {
+      const sublayers = layer.allSublayers?.toArray?.() || [];
+      for (const sublayer of sublayers.filter(matchesConfiguredSublayer)) {
+        try {
+          await sublayer.load?.();
+          const featureLayer = await featureLayerFromSublayer(layer, sublayer);
+          if (featureLayer) {
+            candidates.push({
+              layer: featureLayer,
+              parentTitle: rootTitle || layer.title,
+              sublayerTitle: sublayer.title,
+            });
+          }
+        } catch (error) {
+          console.warn("Zoeksublayer kon niet worden geladen:", sublayer.title, error);
+        }
+      }
+      return;
+    }
+
+    if (layer.type === "group") {
+      const children = layer.layers?.toArray?.() || layer.allLayers?.toArray?.() || [];
+      for (const child of children) {
+        try {
+          // Binnen een groep kan 0000_LABELS zelf een FeatureLayer zijn,
+          // of een MapImageLayer kan de 0000_LABELS-sublayer bevatten.
+          const childNeedsMatch = child.type === "feature";
+          await inspectLayer(child, rootTitle || layer.title, childNeedsMatch);
+        } catch (error) {
+          console.warn("Onderliggende zoeklaag kon niet worden geladen:", child.title, error);
+        }
+      }
+    }
+  }
+
+  for (const layer of configuredParents) {
+    try {
+      await inspectLayer(layer, layer.title, false);
+    } catch (error) {
+      console.warn("Zoeklaag kon niet worden geladen:", layer.title, error);
+    }
+  }
+
+  // Verwijder eventuele dubbels wanneer webmap/groupstructuren dezelfde bron
+  // via meer dan één pad exposen.
+  const uniqueCandidates = [];
+  const seen = new Set();
+  for (const candidate of candidates) {
+    const key = `${candidate.layer.url || candidate.layer.id}|${candidate.layer.layerId ?? ""}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    uniqueCandidates.push(candidate);
+  }
 
   const loaded = [];
-  await Promise.all(
-    featureLayers.map(async (layer) => {
-      try {
-        await layer.load();
-        const meta = sourceMetadata(layer);
-        const score = scoreLayer(layer, meta.searchFields);
-        if (meta.searchFields.length && score > 0) loaded.push({ ...meta, score });
-      } catch (error) {
-        console.warn("Laag kon niet worden geladen:", layer.title, error);
-      }
-    }),
-  );
+  for (const candidate of uniqueCandidates) {
+    const meta = sourceMetadata(candidate.layer);
+    const score = scoreLayer(candidate.layer, meta.searchFields) + 20; // expliciet geconfigureerde bron
+    if (meta.searchFields.length) {
+      loaded.push({ ...meta, ...candidate, score });
+    }
+  }
 
   loaded.sort((a, b) => b.score - a.score);
-
-  const explicitlyConfigured =
-    (CONFIG.data.searchLayerIds || []).length > 0 || (CONFIG.data.searchLayerTitles || []).length > 0;
-
-  if (explicitlyConfigured) return loaded;
-
-  // Neem bij automatische detectie alle sterke kandidaten mee. Dit ondersteunt
-  // ook webmaps met een aparte personen/graflaag per begraafplaats.
-  const bestScore = loaded[0]?.score ?? 0;
-  return loaded.filter((source) => source.score >= Math.max(4, bestScore - 6)).slice(0, 20);
+  return loaded;
 }
 
 function escapeSql(value) {
@@ -294,14 +380,24 @@ function buildServerFilterWhere(source) {
     clauses.push(`${source.cemeteryField.name} = '${escapeSql(cemetery)}'`);
   }
 
-  if (year && source.deathYearField && !isDateField(source.deathYearField)) {
+  if (year) {
     const value = Number(year);
-    if (Number.isFinite(value)) {
-      clauses.push(
-        isNumericField(source.deathYearField)
-          ? `${source.deathYearField.name} = ${value}`
-          : `${source.deathYearField.name} = '${escapeSql(String(value))}'`,
-      );
+    if (Number.isInteger(value) && value >= 1800 && value <= 2200) {
+      if (source.deathYearField && !isDateField(source.deathYearField)) {
+        clauses.push(
+          isNumericField(source.deathYearField)
+            ? `${source.deathYearField.name} = ${value}`
+            : `${source.deathYearField.name} = '${escapeSql(String(value))}'`,
+        );
+      } else if (source.deathDateField) {
+        // Filter het jaar server-side op het echte datumveld. Dit voorkomt dat
+        // een jaarfilter alleen op de eerste N resultaten wordt toegepast.
+        const start = `${value}-01-01`;
+        const end = `${value + 1}-01-01`;
+        clauses.push(
+          `(${source.deathDateField.name} >= DATE '${start}' AND ${source.deathDateField.name} < DATE '${end}')`,
+        );
+      }
     }
   }
 
@@ -386,12 +482,9 @@ function resultKey(source, graphic, index) {
 }
 
 function passesClientFilters(result) {
-  const year = elements.yearFilter.value.trim();
-  if (!year) return true;
-
-  const resultYear = getYear(result.source, result.graphic.attributes, result.source.deathYearField, result.source.deathDateField);
-  if (!resultYear) return false;
-  return String(resultYear) === String(year);
+  // Filters worden waar mogelijk server-side toegepast. Deze hook blijft
+  // beschikbaar voor eventuele toekomstige client-side filters.
+  return true;
 }
 
 async function querySource(source, searchText, perLayerLimit) {
@@ -519,7 +612,13 @@ function createResultCard(result) {
   button.setAttribute("aria-pressed", key === state.selectedKey ? "true" : "false");
   button.setAttribute("aria-label", `${name}. Toon grafplaats op kaart.`);
 
-  const life = birthYear || deathYear ? [birthYear || "?", deathYear || "?"].join(" – ") : "";
+  const life = birthYear && deathYear
+    ? `${birthYear} – ${deathYear}`
+    : deathYear
+      ? `Overleden in ${deathYear}`
+      : birthYear
+        ? `Geboren in ${birthYear}`
+        : "";
   const location = [cemetery, grave].filter(Boolean).join(" · ");
 
   button.innerHTML = `
@@ -537,17 +636,33 @@ async function selectResult(result) {
   updateSelectedCards();
   renderDetail(result);
 
-  if (state.highlightHandle) {
-    state.highlightHandle.remove();
-    state.highlightHandle = null;
+  if (state.highlightGraphic) {
+    state.view.graphics.remove(state.highlightGraphic);
+    state.highlightGraphic = null;
   }
 
-  try {
-    const layerView = await state.view.whenLayerView(result.source.layer);
-    const oid = getObjectId(result.source, result.graphic);
-    state.highlightHandle = oid !== null ? layerView.highlight(oid) : layerView.highlight(result.graphic);
-  } catch (error) {
-    console.warn("Object kon niet worden gemarkeerd:", error);
+  if (result.graphic.geometry) {
+    const geometryType = result.graphic.geometry.type;
+    let symbol = null;
+    if (geometryType === "polygon") {
+      symbol = {
+        type: "simple-fill",
+        color: [255, 218, 0, 0.2],
+        outline: { color: [21, 63, 82, 1], width: 2.5 },
+      };
+    } else if (geometryType === "polyline") {
+      symbol = { type: "simple-line", color: [21, 63, 82, 1], width: 3 };
+    } else {
+      symbol = {
+        type: "simple-marker",
+        color: [255, 218, 0, 0.9],
+        size: 13,
+        outline: { color: [21, 63, 82, 1], width: 2 },
+      };
+    }
+
+    state.highlightGraphic = new Graphic({ geometry: result.graphic.geometry, symbol });
+    state.view.graphics.add(state.highlightGraphic);
   }
 
   if (result.graphic.geometry) {
@@ -584,7 +699,14 @@ function renderDetail(result) {
   const cemetery = getCemetery(source, attrs);
 
   if (birthYear) rows.push(["Geboortejaar", birthYear]);
-  if (deathYear) rows.push(["Overlijdensjaar", deathYear]);
+
+  const deathDateRaw = getAttribute(attrs, source.deathDateField);
+  if (deathDateRaw !== null && deathDateRaw !== undefined && deathDateRaw !== "") {
+    rows.push([source.deathDateField.alias || "Overlijdensdatum", formatDate(deathDateRaw)]);
+  } else if (deathYear) {
+    rows.push(["Overlijdensjaar", deathYear]);
+  }
+
   if (cemetery) rows.push(["Begraafplaats", cemetery]);
 
   for (const grave of getGraveParts(source, attrs)) {
@@ -593,7 +715,12 @@ function renderDetail(result) {
 
   const concessionRaw = getAttribute(attrs, source.concessionEndField);
   if (concessionRaw !== null && concessionRaw !== undefined && concessionRaw !== "") {
-    rows.push([source.concessionEndField.alias || "Concessie tot", formatDate(concessionRaw)]);
+    rows.push([source.concessionEndField.alias || "Einddatum concessie", formatDate(concessionRaw)]);
+  }
+
+  const durationRaw = getAttribute(attrs, source.concessionDurationField);
+  if (durationRaw !== null && durationRaw !== undefined && durationRaw !== "") {
+    rows.push([source.concessionDurationField.alias || "Duur concessie", displayValue(durationRaw)]);
   }
 
   const html = rows.length
@@ -619,9 +746,9 @@ function renderDetail(result) {
 
 function clearSelection({ keepMobileView = false } = {}) {
   state.selectedKey = null;
-  if (state.highlightHandle) {
-    state.highlightHandle.remove();
-    state.highlightHandle = null;
+  if (state.highlightGraphic) {
+    state.view?.graphics.remove(state.highlightGraphic);
+    state.highlightGraphic = null;
   }
   updateSelectedCards();
   elements.desktopDetail.hidden = true;
@@ -755,6 +882,8 @@ function logDetectedConfiguration() {
   console.group("Zoek een overledene — gedetecteerde ArcGIS-configuratie");
   state.searchSources.forEach((source) => {
     console.log({
+      parentLayer: source.parentTitle || null,
+      sublayer: source.sublayerTitle || null,
       layer: source.layer.title,
       layerId: source.layer.id,
       serviceUrl: source.layer.url,
@@ -762,6 +891,8 @@ function logDetectedConfiguration() {
       cemeteryField: source.cemeteryField?.name || null,
       deathYearField: source.deathYearField?.name || null,
       deathDateField: source.deathDateField?.name || null,
+      concessionEndField: source.concessionEndField?.name || null,
+      concessionDurationField: source.concessionDurationField?.name || null,
       graveFields: source.graveFields.map((field) => field.name),
       score: source.score,
     });
@@ -802,7 +933,7 @@ async function initialize() {
   state.searchSources = await discoverSearchSources(webmap);
   if (!state.searchSources.length) {
     throw new Error(
-      "Geen geschikte publieke featurelaag met naamvelden gevonden. Vul searchLayerTitles/searchLayerIds en searchFields in config.js expliciet in.",
+      "De zoeklaag BZ_0000_Begraafplaats_Search / 0000_LABELS kon niet als bevraagbare publieke laag worden geladen. Controleer of de webmap en MapServer-sublayer publiek toegankelijk zijn.",
     );
   }
 
